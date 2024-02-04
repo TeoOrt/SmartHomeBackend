@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
-	"strings"
+	"os"
+	"path"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -87,21 +89,86 @@ func (db *SQLitePool) QueryAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tx.Commit()
-
-	map_array := make(map[string]int, 17)
-
-	for _, item := range gesturesItems {
-		map_array[item.gesture] = item.counter
+	map_array := make([]map[string]interface{}, 17)
+	for idx, gestures := range gesturesItems {
+		pairValue := make(map[string]interface{}, 2)
+		pairValue["title"] = gestures.gesture
+		pairValue["counter"] = gestures.counter
+		map_array[idx] = pairValue
 	}
-	w.WriteHeader(http.StatusOK)
 
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map_array)
+
+	log.Println("Succesful send array")
+}
+
+func (db *SQLitePool) mapJson() map[string]string {
+	//lets match video_type to our
+	workDir, _ := os.Getwd()
+	json_path := path.Join(workDir, "/sqlite_teo/video_types_map.json")
+	jsonFile, _ := os.Open(json_path)
+
+	fmt.Println("Successfully Opened users.json")
+	// defer the closing of our jsonFile so that we can parse it later on
+	defer jsonFile.Close()
+
+	byteValue, _ := io.ReadAll(jsonFile)
+	var result map[string]string
+	json.Unmarshal([]byte(byteValue), &result)
+	return result
+}
+
+func (db *SQLitePool) QueryCounter(video_type string) int {
+	result := db.mapJson()
+	tx, _ := db.Begin()
+
+	stmt, err := tx.Prepare("SELECT counter FROM gestures_table where gesture =?")
+	if err != nil {
+		log.Fatal("Couldnt not query table")
+		return -1
+	}
+	defer stmt.Close()
+
+	counter := 0
+	err = stmt.QueryRow(result[video_type]).Scan(&counter)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("No rows found %v \n", err)
+			return -1
+		}
+		fmt.Printf("Could complete the query %v \n", err)
+		return -1
+	}
+
+	fmt.Printf("%s is at trial : %d", result[video_type], counter)
+	counter++
+
+	stmt, err = tx.Prepare("UPDATE gestures_table SET counter=? WHERE gesture=?")
+
+	if err != nil {
+		log.Printf("Couldn't prepare UPDATE statement: %v", err)
+		return -1
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(counter, result[video_type])
+	if err != nil {
+		fmt.Println("Couldnt update the value")
+		return -1
+	}
+
+	tx.Commit()
+	log.Println("Returning counter value")
+
+	return counter
 }
 
 func (db *SQLitePool) CreateTable() {
 	tx, _ := db.Begin()
 
-	stmt, err := tx.Prepare("CREATE TABLE IF NOT Exists gestures_table(	id INTEGER PRIMARY KEY AUTOINCREMENT,gesture TEXT NOT NULL,counter INTEGER DEFAULT 0);")
+	stmt, err := tx.Prepare("CREATE TABLE IF NOT Exists gestures_table(	id INTEGER PRIMARY KEY AUTOINCREMENT,gesture TEXT UNIQUE NOT NULL,counter INTEGER DEFAULT 0);")
 
 	if err != nil {
 		log.Fatal("Couldnt create table")
@@ -120,16 +187,17 @@ func (db *SQLitePool) CreateTable() {
 	tx.Commit()
 }
 
-func table() []GestureItem {
+func (sql *SQLitePool) table() []GestureItem {
 
-	gestureList := make([]GestureItem, 18)
-
-	str := "H-0.mp4 H-2.mp4 H-4.mp4 H-6.mp4 H-8.mp4 H-DecreaseFanSpeed.mp4 H-FanOn.mp4 H-LightOff.mp4 H-SetThermo.mp4 H-1.mp4 H-3.mp4 H-5.mp4 H-7.mp4 H-9.mp4 H-FanOff.mp4 H-IncreaseFanSpeed.mp4 H-LightOn.mp4"
-	list := strings.Split(str, " ")
-	fmt.Println(len(list))
-	for idx, item := range list {
-		gestureList[idx].gesture = item
+	gestureList := make([]GestureItem, 17)
+	//should have used json
+	mapJson := sql.mapJson()
+	idx := 0
+	fmt.Println(mapJson)
+	for _, value := range mapJson {
+		gestureList[idx].gesture = value
 		gestureList[idx].counter = 0
+		idx++
 	}
 
 	return gestureList
@@ -137,7 +205,7 @@ func table() []GestureItem {
 
 func (db *SQLitePool) ReturnCounterItems() {
 
-	list := table()
+	list := db.table()
 	for _, item := range list {
 
 		tx, _ := db.Begin()
@@ -159,8 +227,6 @@ func (db *SQLitePool) ReturnCounterItems() {
 
 		tx.Commit()
 	}
-	// 	stmt, err := tx.Prepare("insert into users(email,password) values (?,?)")
-
 }
 
 ////ignore I thought we needed users/ keeping it just in case

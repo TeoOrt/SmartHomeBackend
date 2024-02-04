@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -107,10 +108,14 @@ func (pg *SQLitePool) Upload_video(w http.ResponseWriter, r *http.Request) {
 	}
 
 	savedir := strings.Clone(video_uploader.last_name)
-	savefilename := video_uploader.video_type + "_1_" + savedir + ".mp4"
+
+	//we are going to query our counter
+	trial_number := strconv.Itoa(pg.QueryCounter(video_uploader.video_type))
+	savefilename := video_uploader.video_type + "_" + "TRIAL_" + trial_number + "_" + savedir + ".mp4"
+
 	check_utf8(savedir)
+
 	savedir = strings.TrimSpace(savedir)
-	savedir = strings.ToLower(savedir)
 	saveDirectory, err := CreateDir(&savedir)
 
 	if err != nil {
@@ -119,6 +124,9 @@ func (pg *SQLitePool) Upload_video(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("Created directory Succesfully at %s \n", saveDirectory)
+	log.Printf("File name is going to be %s", savefilename)
+
 	f, err := os.Create(filepath.Join(saveDirectory, savefilename))
 	if err != nil {
 		http.Error(w, "Could not create dir, check file", http.StatusInternalServerError)
@@ -126,18 +134,24 @@ func (pg *SQLitePool) Upload_video(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	var maxSize int64 = 10 << 20 // 10 mb is the max
+
+	var maxSize int64 = 20 << 20 // 10 mb is the max
 	lmt := io.MultiReader(buf, io.LimitReader(p, maxSize-511))
 	written, err := io.Copy(f, lmt)
 	if err != nil && err != io.EOF {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("Created file succesfuly at %s not writting to it", savefilename)
+
 	if written > maxSize {
+		log.Printf("File size too big")
 		os.Remove(f.Name())
 		http.Error(w, "file size over limit Max is 10 mb", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("Success added file to %s \n", filepath.Join(saveDirectory, savefilename))
 	w.WriteHeader(200)
 	fmt.Fprintf(w, "Hello, Succesful upload %s\n", filepath.Join(saveDirectory, savefilename))
 
@@ -145,7 +159,7 @@ func (pg *SQLitePool) Upload_video(w http.ResponseWriter, r *http.Request) {
 func check_utf8(str string) {
 	c, _ := utf8.DecodeRuneInString(str)
 	if c != '.' && c != ',' && c != '?' && c != '“' && c != '”' {
-		fmt.Println("Ok:", c)
+		fmt.Println("Ok")
 	} else {
 		fmt.Println("Not ok:", c)
 	}

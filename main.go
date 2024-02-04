@@ -18,6 +18,7 @@ func main() {
 
 	sqlite := &sqlite_teo.SQLitePool{DB: db}
 	sqlite.CreateTable()
+	// sqlite.ReturnCounterItems() //only when creating new table
 	// sqlite.ReturnCounterItems() already filled the table out
 
 	handler := http.StripPrefix("/get_expert/video/", http.FileServer(http.Dir("video_storage/expert_videos")))
