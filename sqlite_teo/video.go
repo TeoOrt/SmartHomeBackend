@@ -2,6 +2,7 @@ package sqlite_teo
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -10,16 +11,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"unicode/utf8"
 )
 
 type Video struct {
-	email      string
+	last_name  string
 	video_type string
 	path       string
 }
 
 func get_text_field(field string, w http.ResponseWriter, reader *multipart.Reader) (string, error) {
-	text := make([]byte, 512)
 	p, err := reader.NextPart()
 	// one more field to parse, EOF is considered as failure here
 	if err != nil {
@@ -30,19 +32,26 @@ func get_text_field(field string, w http.ResponseWriter, reader *multipart.Reade
 	log.Printf("Text Field is %s \n", p.FormName())
 
 	if p.FormName() != field {
+		log.Printf("Could not find expected %v", err)
 		http.Error(w, fmt.Sprintf("%s is expected", field), http.StatusBadRequest)
-		return "", errors.New("email Field Expected")
+		return "", errors.New("last name Field Expected")
 	}
-
-	_, err = p.Read(text)
+	var buf bytes.Buffer
+	_, err = io.CopyN(&buf, p, 512) // Copy at most 512 bytes
 	if err != nil && err != io.EOF {
-		http.Error(w, "could not read the email", http.StatusInternalServerError)
+		http.Error(w, "could not read the last name", http.StatusInternalServerError)
 		return "", err
 	}
-	email := string(text)
-	log.Printf("Printing a  %s", email)
+	last_name := buf.String()
+
+	if !utf8.ValidString(last_name) {
+		log.Printf("Invalid UTF-8 string: %s", last_name)
+		// Handle the error or return an error if necessary
+		return "", errors.New("invalid UTF-8 string")
+	}
+	log.Printf("Printing a  %s", last_name)
 	//
-	return email, nil
+	return last_name, nil
 }
 
 func (pg *SQLitePool) Upload_video(w http.ResponseWriter, r *http.Request) {
@@ -50,19 +59,24 @@ func (pg *SQLitePool) Upload_video(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 32<<20+1024)
 	reader, err := r.MultipartReader()
 	if err != nil {
+		log.Printf("Did not send a multipart%v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	// parse text field
-	video_uploader.email, err = get_text_field("email", w, reader)
+	last_name, err := get_text_field("last_name", w, reader)
+	video_uploader.last_name = last_name
 	if err != nil {
 		log.Fatal(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+
 		return
 	}
 
-	video_uploader.video_type, err = get_text_field("type", w, reader)
+	video_uploader.video_type, err = get_text_field("video_type", w, reader)
 	if err != nil {
 		log.Fatal(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	// we have to still parse the type
@@ -70,10 +84,14 @@ func (pg *SQLitePool) Upload_video(w http.ResponseWriter, r *http.Request) {
 	// parse file field
 	p, err := reader.NextPart()
 	if err != nil && err != io.EOF {
+		log.Printf("Could not read part properly %v", err)
+
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if p.FormName() != "file_field" {
+		log.Printf("File_field was expected %v", err)
+
 		http.Error(w, "file_field is expected", http.StatusBadRequest)
 		return
 	}
@@ -81,19 +99,30 @@ func (pg *SQLitePool) Upload_video(w http.ResponseWriter, r *http.Request) {
 
 	sniff, _ := buf.Peek(512)
 	contentType := http.DetectContentType(sniff)
-	if contentType != "application/octet-stream" {
+	if contentType != "video/mp4" {
+		log.Printf("the content type is not accepted %s %v", contentType, err)
+
 		http.Error(w, fmt.Sprintf("%s is not accepted type", contentType), http.StatusBadRequest)
 		return
 	}
 
-	// f, err := os.CreateTemp("", "hello_23")
+	savedir := strings.Clone(video_uploader.last_name)
+	savefilename := video_uploader.video_type + "_1_" + savedir + ".mp4"
+	check_utf8(savedir)
+	savedir = strings.TrimSpace(savedir)
+	savedir = strings.ToLower(savedir)
+	saveDirectory, err := CreateDir(&savedir)
 
-	saveDirectory := "/home/teoortega/AndroidStudioProjects/SmartHomeBackend/" + video_uploader.email
-	os.MkdirAll(saveDirectory, os.ModePerm)
-	f, err := os.Create(filepath.Join(saveDirectory, "Hi_.mp4"))
+	if err != nil {
+		http.Error(w, "Could not create dir", http.StatusInternalServerError)
+		log.Printf("Something is really wrong")
+		return
+	}
+
+	f, err := os.Create(filepath.Join(saveDirectory, savefilename))
 	if err != nil {
 		http.Error(w, "Could not create dir, check file", http.StatusInternalServerError)
-		log.Printf("Could not create temp dir %v", err)
+		log.Printf("Could not create file %v", err)
 		return
 	}
 	defer f.Close()
@@ -108,6 +137,17 @@ func (pg *SQLitePool) Upload_video(w http.ResponseWriter, r *http.Request) {
 		os.Remove(f.Name())
 		http.Error(w, "file size over limit Max is 10 mb", http.StatusBadRequest)
 		return
+	}
+	w.WriteHeader(200)
+	fmt.Fprintf(w, "Hello, Succesful upload %s\n", filepath.Join(saveDirectory, savefilename))
+
+}
+func check_utf8(str string) {
+	c, _ := utf8.DecodeRuneInString(str)
+	if c != '.' && c != ',' && c != '?' && c != '“' && c != '”' {
+		fmt.Println("Ok:", c)
+	} else {
+		fmt.Println("Not ok:", c)
 	}
 
 }
